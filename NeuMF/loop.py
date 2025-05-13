@@ -1,10 +1,12 @@
 from tqdm import tqdm
+from IPython.display import clear_output
+from typing import Literal
 import pandas as pd
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.amp import GradScaler, autocast
-from .LOSS import TaskLossFN
+from .loss import TaskLossFN
 from MYUTILS.config.constants import (
     DEFAULT_USER_COL,
     DEFAULT_ITEM_COL,
@@ -17,13 +19,10 @@ class Module(nn.Module):
     def __init__(
         self, 
         model, 
-        lr, 
-        lambda_, 
-        task_type="bpr",
-        col_user = DEFAULT_USER_COL,
-        col_item = DEFAULT_ITEM_COL,
-        col_label = DEFAULT_LABEL_COL,
-        col_prediction = DEFAULT_PREDICTION_COL,
+        trn_neg_per_pos_ratio: int,
+        task_type: Literal['bce', 'bpr', 'climf'], 
+        lr: float=1e-4, 
+        lambda_: float=1e-2, 
     ):
         super(Module, self).__init__()
         # device setting
@@ -31,32 +30,31 @@ class Module(nn.Module):
 
         # global attr
         self.model = model.to(self.device)
+        self.trn_neg_per_pos_ratio = trn_neg_per_pos_ratio
+        self.task_type = task_type
         self.lr = lr
         self.lambda_ = lambda_
-        self.task_type = task_type
-        self.col_user = col_user
-        self.col_item = col_item
-        self.col_label = col_label
-        self.col_prediction = col_prediction
+
+        # Loss FN
+        self.task_criterion = TaskLossFN(
+            fn_type=self.task_type,
+        )
 
         # Optimizer
         self.optimizer = optim.Adam(
             params=model.parameters(), 
             lr=self.lr, 
-            weight_decay=lambda_
+            weight_decay=lambda_,
         )
-
-        # Loss FN
-        self.task_criterion = TaskLossFN(type=self.task_type)
 
         # gradient scaler setting
         self.scaler = GradScaler()
 
     def fit(
         self, 
-        trn_loader, 
-        val_loader, 
-        n_epochs, 
+        trn_loader: torch.utils.data.dataloader.DataLoader, 
+        val_loader: torch.utils.data.dataloader.DataLoader, 
+        n_epochs: int, 
     ):
         trn_task_loss_list = []
         val_task_loss_list = []
@@ -79,16 +77,20 @@ class Module(nn.Module):
                 f"VAL TASK LOSS: {val_task_loss:.4f}"
             )
 
-        task_history = dict(
+        history = dict(
             trn=trn_task_loss_list,
             val=val_task_loss_list,
         )
 
-        return task_history
+        return history
 
     def predict(
         self, 
-        tst_loader, 
+        tst_loader: torch.utils.data.dataloader.DataLoader, 
+        col_user = DEFAULT_USER_COL,
+        col_item = DEFAULT_ITEM_COL,
+        col_label = DEFAULT_LABEL_COL,
+        col_prediction = DEFAULT_PREDICTION_COL,
     ):
         self.model.eval()
 
@@ -121,33 +123,18 @@ class Module(nn.Module):
             pred_list.extend(preds_batch.cpu().tolist())
 
 
-        df_true = pd.DataFrame(
+        result = pd.DataFrame(
             {
-                self.col_user: user_idx_list,
-                self.col_item: item_idx_list,
-                self.col_label: target_list,
+                col_user: user_idx_list,
+                col_item: item_idx_list,
+                col_label: target_list,
+                col_prediction: pred_list,
             }
-        )
-        df_pred = pd.DataFrame(
-            {
-                self.col_user: user_idx_list,
-                self.col_item: item_idx_list,
-                self.col_prediction: pred_list,
-            }
-        )
-        result = dict(
-            true=df_true,
-            pred=df_pred
         )
 
         return result
 
-    def _train_epoch(
-        self, 
-        trn_loader, 
-        n_epochs, 
-        epoch, 
-    ):
+    def _train_epoch(self, trn_loader, n_epochs, epoch):
         self.model.train()
 
         epoch_task_loss = 0.0
@@ -158,41 +145,31 @@ class Module(nn.Module):
             desc=f"Epoch {epoch+1}/{n_epochs} TRN"
         )
 
-        # model
         for user_idx_batch, item_idx_batch, target_batch in iter_obj:
             # to gpu
-            user_idx_batch = user_idx_batch.to(self.device)
-            item_idx_batch = item_idx_batch.to(self.device)
-            target_batch = target_batch.to(self.device)
-
             kwargs = dict(
-                user_idx_batch=user_idx_batch,
-                item_idx_batch=item_idx_batch,
-                target_batch=target_batch,
+                user_idx=user_idx_batch.to(self.device),
+                item_idx=item_idx_batch.to(self.device),
+                target=target_batch.to(self.device),
             )
 
+            # forward pass
             with autocast(self.device.type):
-                # forward pass
                 self.optimizer.zero_grad()
                 batch_task_loss = self._batch(**kwargs)
 
             # accumulate loss
             epoch_task_loss += batch_task_loss.item()
 
-            # backward pass of model
-            self.scaler.scale(batch_task_loss).backward()
-            self.scaler.step(self.optimizer)
-            self.scaler.update()
-            self.optimizer.zero_grad()
+            # backward pass
+            self._run_fn_opt(batch_task_loss)
 
-        return epoch_task_loss/len(trn_loader)
+        return self._return_fn_loss(
+            task_loss=epoch_task_loss, 
+            dataloader=trn_loader,
+        )
 
-    def _valid_epoch(
-        self, 
-        val_loader, 
-        n_epochs,
-        epoch,
-    ):
+    def _valid_epoch(self, val_loader, n_epochs, epoch):
         self.model.eval()
 
         epoch_task_loss = 0.0
@@ -202,42 +179,40 @@ class Module(nn.Module):
             desc=f"Epoch {epoch+1}/{n_epochs} VAL"
         )
 
-        # forward pass of model
         with torch.no_grad():
             for user_idx_batch, item_idx_batch, target_batch in iter_obj:
                 # to gpu
-                user_idx_batch = user_idx_batch.to(self.device)
-                item_idx_batch = item_idx_batch.to(self.device)
-                target_batch = target_batch.to(self.device)
-
                 kwargs = dict(
-                    user_idx_batch=user_idx_batch,
-                    item_idx_batch=item_idx_batch,
-                    target_batch=target_batch,
+                    user_idx=user_idx_batch.to(self.device),
+                    item_idx=item_idx_batch.to(self.device),
+                    target=target_batch.to(self.device),
                 )
 
+                # forward pass
                 with autocast(self.device.type):
                     batch_task_loss = self._batch(**kwargs)
 
                 # accumulate loss
                 epoch_task_loss += batch_task_loss.item()
 
-        return epoch_task_loss/len(val_loader)
+        return self._return_fn_loss(
+            task_loss=epoch_task_loss, 
+            dataloader=val_loader,
+        )
 
-    def _batch(
-        self,
-        user_idx_batch,        # [B_pos + B_neg]
-        item_idx_batch,        # [B_pos + B_neg]
-        target_batch,          # [B_pos + B_neg]
-    ):
-        # 예측
-        preds = self.model(user_idx_batch, item_idx_batch)       # [B_total]
+    def _batch(self, user_idx, item_idx, target):
+        logits = self.model(user_idx, item_idx)
+        task_loss = self.task_criterion.compute(logits, target)
+        return task_loss
 
-        # 손실 계산
-        mask_pos = (target_batch==1)
-        mask_neg = (target_batch==0)
-        pred_pos = preds[mask_pos]                                              # [B]
-        pred_neg = preds[mask_neg].view(pred_pos.size(0), -1)                   # [B, N]
-        batch_task_loss = self.task_criterion.compute(pred_pos, pred_neg)
+    def _run_fn_opt(self, loss):
+        self.scaler.scale(loss).backward()
+        self.scaler.step(self.optimizer)
+        self.scaler.update()
+        self.optimizer.zero_grad()
 
-        return batch_task_loss
+    def _return_fn_loss(self, task_loss, dataloader):
+        if self.task_type=='bce':
+            return task_loss/(len(dataloader) * (self.trn_neg_per_pos_ratio + 1))
+        else:
+            return task_loss/len(dataloader)

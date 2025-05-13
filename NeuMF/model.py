@@ -33,7 +33,7 @@ class Module(nn.Module):
         self._assert_arg_error()
 
         # generate layers
-        self._param_layers()
+        self._init_layers()
 
     def forward(self, user_idx, item_idx):
         logit = self._score(user_idx, item_idx)
@@ -53,7 +53,7 @@ class Module(nn.Module):
             tensors=(gmf_out, mlp_out), 
             dim=-1
         )
-        logit = self.logit_layers(concat).squeeze(-1)
+        logit = self.logit_layer(concat).squeeze(-1)
 
         return logit
 
@@ -75,26 +75,26 @@ class Module(nn.Module):
 
         return mlp_out
 
-    def _param_layers(self):
+    def _init_layers(self):
         self.embed_user_gmf = nn.Embedding(
             num_embeddings=self.n_users+1, 
-            embedding_dim=self.n_factors,
+            embedding_dim=self.n_factors//2,
             padding_idx=self.n_users,
         )
         self.embed_item_gmf = nn.Embedding(
             num_embeddings=self.n_items+1, 
-            embedding_dim=self.n_factors,
+            embedding_dim=self.n_factors//2,
             padding_idx=self.n_items,
         )
 
         self.embed_user_mlp = nn.Embedding(
             num_embeddings=self.n_users+1, 
-            embedding_dim=self.n_factors*2,
+            embedding_dim=self.n_factors,
             padding_idx=self.n_users,
         )
         self.embed_item_mlp = nn.Embedding(
             num_embeddings=self.n_items+1, 
-            embedding_dim=self.n_factors*2,
+            embedding_dim=self.n_factors,
             padding_idx=self.n_items,
         )
 
@@ -102,8 +102,8 @@ class Module(nn.Module):
             *list(self._generate_layers(self.hidden))
         )
         
-        self.logit_layers = nn.Linear(
-            in_features=self.n_factors + self.hidden[-1],
+        self.logit_layer = nn.Linear(
+            in_features=self.n_factors//2 + self.hidden[-1],
             out_features=1,
         )
 
@@ -117,6 +117,6 @@ class Module(nn.Module):
             idx += 1
 
     def _assert_arg_error(self):
-        CONDITION = (self.hidden[0] == self.n_factors * 4)
-        ERROR_MESSAGE = f"First MLP layer must match input size: {self.n_factors * 4}"
+        CONDITION = (self.hidden[0] == self.n_factors * 2)
+        ERROR_MESSAGE = f"First MLP layer must match input size: {self.n_factors * 2}"
         assert CONDITION, ERROR_MESSAGE
