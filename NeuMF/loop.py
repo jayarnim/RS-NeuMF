@@ -12,7 +12,9 @@ from MYUTILS.config.constants import (
     DEFAULT_ITEM_COL,
     DEFAULT_LABEL_COL,
     DEFAULT_PREDICTION_COL,
+    DEFAULT_K,
 )
+from MYUTILS import ranking
 
 
 class Module(nn.Module):
@@ -54,28 +56,66 @@ class Module(nn.Module):
         self, 
         trn_loader: torch.utils.data.dataloader.DataLoader, 
         val_loader: torch.utils.data.dataloader.DataLoader, 
+        loo_loader: torch.utils.data.dataloader.DataLoader, 
         n_epochs: int, 
+        metric: Literal['hr', 'precision', 'recall', 'map', 'ndcg']='ndcg',
+        interval: int=10,
+        patience: int=10,
+        delta: float=1e-3,
     ):
         trn_task_loss_list = []
         val_task_loss_list = []
+
+        counter = 0
+        best_epoch = 0
+        best_metric = 0
+        best_model_state = None
 
         for epoch in range(n_epochs):
             if epoch % 10 == 0:
                 print(f"EPOCH {epoch+1} START ---->>>>")
 
-            # Train
+            # TRN
             trn_task_loss = self._train_epoch(trn_loader, n_epochs, epoch)
             trn_task_loss_list.append(trn_task_loss)
-            print(
-                f"TRN TASK LOSS: {trn_task_loss:.4f}"
-            )
+            print(f"TRN TASK LOSS: {trn_task_loss:.4f}")
 
-            # Validation
+            # VAL
             val_task_loss = self._valid_epoch(val_loader, n_epochs, epoch)
             val_task_loss_list.append(val_task_loss)
-            print(
-                f"VAL TASK LOSS: {val_task_loss:.4f}"
-            )
+            print(f"VAL TASK LOSS: {val_task_loss:.4f}")
+
+            # LOO
+            if (epoch != 0) and (epoch % interval == 0):
+                current_metric = self._loo_epoch(loo_loader, metric)
+                print(
+                    f"LEAVE ONE OUT CURRENT METRIC: {current_metric:.4f}",
+                    f"BEST METRIC: {best_metric:.4f}",
+                    sep='\t',
+                )
+
+                if current_metric > best_metric + delta:
+                    best_epoch = epoch + 1
+                    best_metric = current_metric
+                    best_model_state = self.model.state_dict()
+                    counter = 0
+                else:
+                    counter += 1
+                
+                if counter > patience:
+                    break
+                
+            # log reset
+            if (epoch + 1) % 50 == 0:
+                clear_output(wait=False)
+
+        self.model.load_state_dict(best_model_state)
+        clear_output(wait=False)
+        print(
+            f"LEAVE ONE OUT BEST EPOCH: {best_epoch}",
+            f"LEAVE ONE OUT BEST METRIC: {best_metric:.4f}",
+            sep="\n"
+        )
 
         history = dict(
             trn=trn_task_loss_list,
@@ -133,6 +173,23 @@ class Module(nn.Module):
         )
 
         return result
+
+    def _loo_epoch(self, loo_loader, metric):
+        TRUE_COL_LIST = [DEFAULT_USER_COL, DEFAULT_ITEM_COL, DEFAULT_LABEL_COL]
+        PRED_COL_LIST = [DEFAULT_USER_COL, DEFAULT_ITEM_COL, DEFAULT_PREDICTION_COL]
+
+        result = self.predict(loo_loader)
+        
+        kwargs = dict(
+                rating_true=result[TRUE_COL_LIST],
+                rating_pred=result[PRED_COL_LIST],
+                k=DEFAULT_K,
+                metric=[metric],
+            )
+
+        eval_metric = ranking.metrics.eval_top_k(**kwargs)
+
+        return eval_metric[metric]
 
     def _train_epoch(self, trn_loader, n_epochs, epoch):
         self.model.train()
