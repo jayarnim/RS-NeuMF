@@ -113,7 +113,8 @@ class Module(nn.Module):
             if (epoch + 1) % 50 == 0:
                 clear_output(wait=False)
 
-        self.model.load_state_dict(best_model_state)
+        if best_model_state is not None:
+            self.model.load_state_dict(best_model_state)
         clear_output(wait=False)
         print(
             f"LEAVE ONE OUT BEST EPOCH: {best_epoch}",
