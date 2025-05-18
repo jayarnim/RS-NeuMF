@@ -17,12 +17,16 @@ from MYUTILS.config.constants import (
 from MYUTILS import ranking
 
 
+TaskType = Literal['bce', 'bpr', 'climf']
+MetricType = Literal['hr', 'precision', 'recall', 'map', 'ndcg']
+
+
 class Module(nn.Module):
     def __init__(
         self, 
         model, 
         trn_neg_per_pos_ratio: int,
-        task_type: Literal['bce', 'bpr', 'climf'], 
+        task_type: TaskType, 
         lr: float=1e-4, 
         lambda_: float=1e-2, 
     ):
@@ -58,7 +62,7 @@ class Module(nn.Module):
         val_loader: torch.utils.data.dataloader.DataLoader, 
         loo_loader: torch.utils.data.dataloader.DataLoader, 
         n_epochs: int, 
-        metric: Literal['hr', 'precision', 'recall', 'map', 'ndcg']='ndcg',
+        metric: MetricType='ndcg',
         interval: int=10,
         patience: int=10,
         delta: float=1e-3,
@@ -68,7 +72,7 @@ class Module(nn.Module):
 
         counter = 0
         best_epoch = 0
-        best_metric = 0
+        best_score = 0
         best_model_state = None
 
         for epoch in range(n_epochs):
@@ -87,16 +91,16 @@ class Module(nn.Module):
 
             # LOO
             if (epoch != 0) and (epoch % interval == 0):
-                current_metric = self._loo_epoch(loo_loader, metric)
+                current_score = self._loo_epoch(loo_loader, metric)
                 print(
-                    f"LEAVE ONE OUT CURRENT METRIC: {current_metric:.4f}",
-                    f"BEST METRIC: {best_metric:.4f}",
+                    f"LEAVE ONE OUT CURRENT SCORE: {current_score:.4f}",
+                    f"BEST SCORE: {best_score:.4f}({best_epoch})",
                     sep='\t',
                 )
 
-                if current_metric > best_metric + delta:
+                if current_score > best_score + delta:
                     best_epoch = epoch + 1
-                    best_metric = current_metric
+                    best_score = current_score
                     best_model_state = self.model.state_dict()
                     counter = 0
                 else:
@@ -113,7 +117,7 @@ class Module(nn.Module):
         clear_output(wait=False)
         print(
             f"LEAVE ONE OUT BEST EPOCH: {best_epoch}",
-            f"LEAVE ONE OUT BEST METRIC: {best_metric:.4f}",
+            f"LEAVE ONE OUT BEST SCORE: {best_score:.4f}",
             sep="\n"
         )
 
@@ -184,12 +188,12 @@ class Module(nn.Module):
                 rating_true=result[TRUE_COL_LIST],
                 rating_pred=result[PRED_COL_LIST],
                 k=DEFAULT_K,
-                metric=[metric],
+                metric=metric,
             )
 
-        eval_metric = ranking.metrics.eval_top_k(**kwargs)
+        eval_score = ranking.metrics.eval_top_k(**kwargs)
 
-        return eval_metric[metric]
+        return eval_score
 
     def _train_epoch(self, trn_loader, n_epochs, epoch):
         self.model.train()
