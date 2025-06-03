@@ -99,7 +99,7 @@ class Module:
         data: pd.DataFrame,
     ):
         interaction_ndarray = np.zeros(
-            shape=(self.n_users, self.n_items), 
+            shape=(self.n_users+1, self.n_items+1), 
             dtype=np.int32,
         )
 
