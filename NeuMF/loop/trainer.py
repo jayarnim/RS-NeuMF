@@ -1,24 +1,23 @@
 from tqdm import tqdm
+import copy
 from IPython.display import clear_output
-from typing import Literal
 import pandas as pd
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.amp import GradScaler, autocast
+from .predictor import predict
 from .loss import TaskLossFN
-from MYUTILS.config.constants import (
+from .constants import (
     DEFAULT_USER_COL,
     DEFAULT_ITEM_COL,
     DEFAULT_LABEL_COL,
     DEFAULT_PREDICTION_COL,
     DEFAULT_K,
+    TASK_TYPE,
+    METRIC_TYPE,
 )
 from MYUTILS import ranking
-
-
-TaskType = Literal['bce', 'bpr', 'climf']
-MetricType = Literal['hr', 'precision', 'recall', 'map', 'ndcg']
 
 
 class Module(nn.Module):
@@ -26,13 +25,18 @@ class Module(nn.Module):
         self, 
         model, 
         trn_neg_per_pos_ratio: int,
-        task_type: TaskType, 
+        task_type: TASK_TYPE, 
         lr: float=1e-4, 
-        lambda_: float=1e-2, 
+        lambda_: float=1e-3, 
+        col_user: str=DEFAULT_USER_COL,
+        col_item: str=DEFAULT_ITEM_COL,
+        col_label: str=DEFAULT_LABEL_COL,
+        col_prediction: str=DEFAULT_PREDICTION_COL,
     ):
         super(Module, self).__init__()
         # device setting
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+        self.device = torch.device(DEVICE)
 
         # global attr
         self.model = model.to(self.device)
@@ -40,6 +44,10 @@ class Module(nn.Module):
         self.task_type = task_type
         self.lr = lr
         self.lambda_ = lambda_
+        self.col_user = col_user
+        self.col_item = col_item
+        self.col_label= col_label
+        self.col_prediction = col_prediction
 
         # Loss FN
         self.task_criterion = TaskLossFN(
@@ -62,7 +70,7 @@ class Module(nn.Module):
         val_loader: torch.utils.data.dataloader.DataLoader, 
         loo_loader: torch.utils.data.dataloader.DataLoader, 
         n_epochs: int, 
-        metric: MetricType='ndcg',
+        metric: METRIC_TYPE='ndcg',
         interval: int=10,
         patience: int=10,
         delta: float=1e-3,
@@ -101,7 +109,7 @@ class Module(nn.Module):
                 if current_score > best_score + delta:
                     best_epoch = epoch + 1
                     best_score = current_score
-                    best_model_state = self.model.state_dict()
+                    best_model_state = copy.deepcopy(self.model.state_dict())
                     counter = 0
                 else:
                     counter += 1
@@ -113,14 +121,16 @@ class Module(nn.Module):
             if (epoch + 1) % 50 == 0:
                 clear_output(wait=False)
 
-        if best_model_state is not None:
-            self.model.load_state_dict(best_model_state)
         clear_output(wait=False)
+        
         print(
             f"LEAVE ONE OUT BEST EPOCH: {best_epoch}",
             f"LEAVE ONE OUT BEST SCORE: {best_score:.4f}",
             sep="\n"
         )
+
+        if best_model_state is not None:
+            self.model.load_state_dict(best_model_state)
 
         history = dict(
             trn=trn_task_loss_list,
@@ -128,73 +138,6 @@ class Module(nn.Module):
         )
 
         return history
-
-    def predict(
-        self, 
-        tst_loader: torch.utils.data.dataloader.DataLoader, 
-        col_user = DEFAULT_USER_COL,
-        col_item = DEFAULT_ITEM_COL,
-        col_label = DEFAULT_LABEL_COL,
-        col_prediction = DEFAULT_PREDICTION_COL,
-    ):
-        self.model.eval()
-
-        user_idx_list, item_idx_list, target_list, pred_list = [], [], [], []
-
-        iter_obj = tqdm(
-            iterable=tst_loader, 
-            desc=f"TST"
-        )
-
-        for user_idx_batch, item_idx_batch, target_batch in iter_obj:
-            # to gpu
-            user_idx_batch = user_idx_batch.to(self.device)
-            item_idx_batch = item_idx_batch.to(self.device)
-            target_batch = target_batch.to(self.device)
-
-            kwargs = dict(
-                user_idx=user_idx_batch,
-                item_idx=item_idx_batch,
-            )
-
-            # predict
-            with autocast(self.device.type):
-                preds_batch = self.model.predict(**kwargs)
-
-            # to cpu & save
-            user_idx_list.extend(user_idx_batch.cpu().tolist())
-            item_idx_list.extend(item_idx_batch.cpu().tolist())
-            target_list.extend(target_batch.cpu().tolist())
-            pred_list.extend(preds_batch.cpu().tolist())
-
-
-        result = pd.DataFrame(
-            {
-                col_user: user_idx_list,
-                col_item: item_idx_list,
-                col_label: target_list,
-                col_prediction: pred_list,
-            }
-        )
-
-        return result
-
-    def _loo_epoch(self, loo_loader, metric):
-        TRUE_COL_LIST = [DEFAULT_USER_COL, DEFAULT_ITEM_COL, DEFAULT_LABEL_COL]
-        PRED_COL_LIST = [DEFAULT_USER_COL, DEFAULT_ITEM_COL, DEFAULT_PREDICTION_COL]
-
-        result = self.predict(loo_loader)
-        
-        kwargs = dict(
-                rating_true=result[TRUE_COL_LIST],
-                rating_pred=result[PRED_COL_LIST],
-                k=DEFAULT_K,
-                metric=metric,
-            )
-
-        eval_score = ranking.metrics.eval_top_k(**kwargs)
-
-        return eval_score
 
     def _train_epoch(self, trn_loader, n_epochs, epoch):
         self.model.train()
@@ -262,9 +205,29 @@ class Module(nn.Module):
             dataloader=val_loader,
         )
 
+    def _loo_epoch(self, loo_loader, metric):
+        TRUE_COL_LIST = [self.col_user, self.col_item, self.col_label]
+        PRED_COL_LIST = [self.col_user, self.col_item, self.col_prediction]
+
+        result = predict(
+            model=self.model, 
+            tst_loader=loo_loader,
+        )
+        
+        kwargs = dict(
+                rating_true=result[TRUE_COL_LIST],
+                rating_pred=result[PRED_COL_LIST],
+                k=DEFAULT_K,
+                metric=metric,
+            )
+
+        eval_score = ranking.metrics.eval_top_k(**kwargs)
+
+        return eval_score
+
     def _batch(self, user_idx, item_idx, target):
-        logits = self.model(user_idx, item_idx)
-        task_loss = self.task_criterion.compute(logits, target)
+        _, logit = self.model(user_idx, item_idx)
+        task_loss = self.task_criterion.compute(logit, target)
         return task_loss
 
     def _run_fn_opt(self, loss):
@@ -275,6 +238,8 @@ class Module(nn.Module):
 
     def _return_fn_loss(self, task_loss, dataloader):
         if self.task_type=='bce':
-            return task_loss/(len(dataloader) * (self.trn_neg_per_pos_ratio + 1))
+            n_samples = len(dataloader) * (self.trn_neg_per_pos_ratio + 1)
+            return task_loss / n_samples
         else:
-            return task_loss/len(dataloader)
+            n_pairs = len(dataloader)
+            return task_loss / n_pairs

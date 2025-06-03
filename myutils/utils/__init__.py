@@ -2,5 +2,5 @@ from . import (
     checkpoint,
     data,
     seed,
-    vis,
+    visualizer,
 )

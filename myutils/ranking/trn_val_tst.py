@@ -1,4 +1,5 @@
 from typing import Optional
+import numpy as np
 import pandas as pd
 import torch
 from torch.nn.utils.rnn import pad_sequence
@@ -87,7 +88,28 @@ class Module:
             max_hist=max_hist,
         )
 
-        return loaders, histories
+        interactions = self._interactions(
+            data=split_list[0],
+        )
+
+        return loaders, histories, interactions
+
+    def _interactions(
+        self,
+        data: pd.DataFrame,
+    ):
+        interaction_ndarray = np.zeros(
+            shape=(self.n_users, self.n_items), 
+            dtype=np.int32,
+        )
+
+        user_indices = data[self.col_user].values
+        item_indices = data[self.col_item].values
+        interaction_ndarray[user_indices, item_indices] = 1
+
+        interaction_tensor = torch.from_numpy(interaction_ndarray)
+
+        return interaction_tensor
 
     def _histories(
         self, 

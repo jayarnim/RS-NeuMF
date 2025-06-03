@@ -10,7 +10,6 @@ class Module(nn.Module):
         n_factors: int,
         hidden: list,
         dropout: float,
-        model_name: str="NeuMF",
     ):
         super(Module, self).__init__()
         # attr dictionary for load
@@ -19,7 +18,8 @@ class Module(nn.Module):
         del self.init_args["__class__"]
 
         # device setting
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+        self.device = torch.device(DEVICE)
 
         # global attr
         self.n_users = n_users
@@ -27,7 +27,6 @@ class Module(nn.Module):
         self.n_factors = n_factors
         self.hidden = hidden
         self.dropout = dropout
-        self.model_name = model_name
 
         # debugging args error
         self._assert_arg_error()
@@ -35,75 +34,62 @@ class Module(nn.Module):
         # generate layers
         self._init_layers()
 
-    def forward(self, user_idx, item_idx):
-        logit = self._score(user_idx, item_idx)
-        return logit
+    def forward(
+        self, 
+        user_idx: torch.Tensor, 
+        item_idx: torch.Tensor,
+    ):
+        """
+        user_idx: (B,)
+        item_idx: (B,)
+        """
+        return self._score(user_idx, item_idx)
 
-    def predict(self, user_idx, item_idx):
+    def predict(
+        self, 
+        user_idx: torch.Tensor, 
+        item_idx: torch.Tensor,
+    ):
+        """
+        user_idx: (B,)
+        item_idx: (B,)
+        """
         with torch.no_grad():
-            logit = self._score(user_idx, item_idx)
+            _, logit = self._score(user_idx, item_idx)
             pred = torch.sigmoid(logit)
         return pred
 
     def _score(self, user_idx, item_idx):
-        gmf_out = self._gmf(user_idx, item_idx)
-        mlp_out = self._mlp(user_idx, item_idx)
+        user_slice = self.embed_user(user_idx)
+        item_slice = self.embed_item(item_idx)
 
-        concat = torch.cat(
-            tensors=(gmf_out, mlp_out), 
-            dim=-1
-        )
-        logit = self.logit_layer(concat).squeeze(-1)
-
-        return logit
-
-    def _gmf(self, user, item):
-        gmf_user = self.embed_user_gmf(user)
-        gmf_item = self.embed_item_gmf(item)
-        gmf_out = gmf_user * gmf_item
-        return gmf_out
-
-    def _mlp(self, user_idx, item_idx):
-        user_slice = self.embed_user_mlp(user_idx)
-        item_slice = self.embed_item_mlp(item_idx)
-        
         concat = torch.cat(
             tensors=(user_slice, item_slice), 
             dim=-1
         )
-        mlp_out = self.mlp_layers(concat)
 
-        return mlp_out
+        pred_vector = self.mlp_layers(concat)
+
+        logit = self.logit_layer(pred_vector).squeeze(-1)
+
+        return pred_vector, logit
 
     def _init_layers(self):
-        self.embed_user_gmf = nn.Embedding(
-            num_embeddings=self.n_users+1, 
-            embedding_dim=self.n_factors//2,
-            padding_idx=self.n_users,
-        )
-        self.embed_item_gmf = nn.Embedding(
-            num_embeddings=self.n_items+1, 
-            embedding_dim=self.n_factors//2,
-            padding_idx=self.n_items,
-        )
-
-        self.embed_user_mlp = nn.Embedding(
+        self.embed_user = nn.Embedding(
             num_embeddings=self.n_users+1, 
             embedding_dim=self.n_factors,
             padding_idx=self.n_users,
         )
-        self.embed_item_mlp = nn.Embedding(
+        self.embed_item = nn.Embedding(
             num_embeddings=self.n_items+1, 
             embedding_dim=self.n_factors,
             padding_idx=self.n_items,
         )
-
         self.mlp_layers = nn.Sequential(
             *list(self._generate_layers(self.hidden))
         )
-        
         self.logit_layer = nn.Linear(
-            in_features=self.n_factors//2 + self.hidden[-1],
+            in_features=self.hidden[-1],
             out_features=1,
         )
 

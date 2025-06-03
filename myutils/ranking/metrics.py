@@ -1,4 +1,4 @@
-from typing import Literal, List
+from typing import Union, Literal, List
 import pandas as pd
 from ..config.constants import (
     DEFAULT_USER_COL,
@@ -16,6 +16,41 @@ from ..msr.python_evaluation import (
 )
 
 
+MetricType = Literal['hr', 'precision', 'recall', 'map', 'ndcg']
+
+
+def _metric_str(metric, **kwargs):
+    if metric=='hr':
+        return hit_ratio_at_k(**kwargs)
+    elif metric=='precision':
+        return precision_at_k(**kwargs)
+    elif metric=='recall':
+        return recall_at_k(**kwargs)
+    elif metric=='map':
+        return map_at_k(**kwargs)
+    elif metric=='ndcg':
+        return ndcg_at_k(**kwargs)
+    else:
+        raise ValueError("Invalid Metric")
+
+
+def _metric_dict(metric, **kwargs):
+    hr_ = hit_ratio_at_k(**kwargs) if 'hr' in metric else None
+    prec_ = precision_at_k(**kwargs) if 'precision' in metric else None
+    rec_ = recall_at_k(**kwargs) if 'recall' in metric else None
+    map_ = map_at_k(**kwargs) if 'map' in metric else None
+    ndcg_ = ndcg_at_k(**kwargs) if 'ndcg' in metric else None
+
+    return dict(
+        top_k=kwargs.get('k', DEFAULT_K),
+        hit_ratio=hr_, 
+        precision=prec_, 
+        recall=rec_, 
+        map=map_, 
+        ndcg=ndcg_,
+    )
+
+
 def eval_top_k(
     rating_true: pd.DataFrame,
     rating_pred: pd.DataFrame,
@@ -24,7 +59,7 @@ def eval_top_k(
     col_rating: str=DEFAULT_LABEL_COL,
     col_prediction: str=DEFAULT_PREDICTION_COL,
     k: int=DEFAULT_K,
-    metric: List[Literal['hr', 'precision', 'recall', 'map', 'ndcg']]=['hr', 'precision', 'recall', 'map', 'ndcg'],
+    metric: Union[MetricType, List[MetricType]]=['hr', 'precision', 'recall', 'map', 'ndcg'],
 ):
     rating_true = (
         rating_true[rating_true[col_rating]==1]
@@ -50,19 +85,9 @@ def eval_top_k(
         k=k,
     )
 
-    hr_ = hit_ratio_at_k(**kwargs) if 'hr' in metric else None
-    prec_ = precision_at_k(**kwargs) if 'precision' in metric else None
-    rec_ = recall_at_k(**kwargs) if 'recall' in metric else None
-    map_ = map_at_k(**kwargs) if 'map' in metric else None
-    ndcg_ = ndcg_at_k(**kwargs) if 'ndcg' in metric else None
-
-    result = dict(
-        top_k=k,
-        hit_ratio=hr_, 
-        precision=prec_, 
-        recall=rec_, 
-        map=map_, 
-        ndcg=ndcg_,
-    )
-
-    return result
+    if isinstance(metric, str):
+        return _metric_str(metric, **kwargs)
+    elif isinstance(metric, list):
+        return _metric_dict(metric, **kwargs)
+    else:
+        raise ValueError("Invalid Metric Type")
