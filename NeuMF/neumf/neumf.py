@@ -74,12 +74,12 @@ class Module(nn.Module):
         return pred_vector, logit
 
     def _init_layers(self):
-        self.gmf = gmf(
+        self.gmf = gmf.Module(
             n_users=self.n_users,
             n_items=self.n_items,
             n_factors=self.n_factors // 2,
         )
-        self.ncf = ncf(
+        self.ncf = ncf.Module(
             n_users=self.n_users,
             n_items=self.n_items,
             n_factors=self.n_factors,
