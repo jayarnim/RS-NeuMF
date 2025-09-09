@@ -43,7 +43,7 @@ class Module(nn.Module):
         user_idx: (B,)
         item_idx: (B,)
         """
-        return self._score(user_idx, item_idx)
+        return self.score(user_idx, item_idx)
 
     def predict(
         self, 
@@ -55,24 +55,27 @@ class Module(nn.Module):
         item_idx: (B,)
         """
         with torch.no_grad():
-            _, logit = self._score(user_idx, item_idx)
+            logit = self.score(user_idx, item_idx)
             pred = torch.sigmoid(logit)
         return pred
 
-    def _score(self, user_idx, item_idx):
+    def score(self, user_idx, item_idx):
+        pred_vector = self.ncf(user_idx, item_idx)
+        logit = self.logit_layer(pred_vector).squeeze(-1)
+        return logit
+
+    def ncf(self, user_idx, item_idx):
         user_slice = self.embed_user(user_idx)
         item_slice = self.embed_item(item_idx)
 
         concat = torch.cat(
             tensors=(user_slice, item_slice), 
-            dim=-1
+            dim=-1,
         )
 
         pred_vector = self.mlp_layers(concat)
 
-        logit = self.logit_layer(pred_vector).squeeze(-1)
-
-        return pred_vector, logit
+        return pred_vector
 
     def _init_layers(self):
         self.embed_user = nn.Embedding(
