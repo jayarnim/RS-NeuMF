@@ -94,7 +94,7 @@ class TrainingLoop:
 
         print(
             f"LEAVE ONE OUT BEST EPOCH: {best_epoch}",
-            f"LEAVE ONE OUT BEST SCORE (ndcg@10): {best_score:.4f}",
+            f"LEAVE ONE OUT BEST SCORE: {best_score:.4f}",
             f"MEAN OF PER EPOCH (/s): {mean(epoch_times):.4f}",
             sep="\n"
         )
