@@ -11,21 +11,19 @@ class PairwiseTrainer:
         model,
         task_fn,
         lr: float=1e-4, 
-        opt_lambda_: float=1e-3, 
-        kl_lambda_: float=1.0,
+        lambda_: float=1e-3, 
     ):
         DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
         self.device = torch.device(DEVICE)
 
         self.model = model
         self.task_fn = task_fn
-        self.kl_lambda_ = kl_lambda_
         
         # optimizer
         kwargs = dict(
             params=self.model.parameters(), 
             lr=lr, 
-            weight_decay=opt_lambda_,
+            weight_decay=lambda_,
         )
         self.optimizer = optim.Adam(**kwargs)
 
