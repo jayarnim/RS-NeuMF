@@ -67,9 +67,10 @@ class TrainingLoop:
                     break
                 else:
                     print(
-                        f"LEAVE ONE OUT CURRENT SCORE: {current_score:.4f}",
-                        f"LEAVE ONE OUT BEST SCORE: {self.monitor.stopper.best_score:.4f}\tBEST EPOCH: {self.monitor.stopper.best_epoch}",
-                        sep='\n',
+                        f"CURRENT SCORE: {current_score:.4f}",
+                        f"BEST SCORE: {self.monitor.stopper.best_score:.4f}",
+                        f"BEST EPOCH: {self.monitor.stopper.best_epoch}",
+                        sep='\t',
                     )
 
             # log reset
