@@ -15,10 +15,6 @@ class Module(nn.Module):
         del self.init_args["self"]
         del self.init_args["__class__"]
 
-        # device setting
-        DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-        self.device = torch.device(DEVICE)
-
         # global attr
         self.n_users = n_users
         self.n_items = n_items
@@ -36,10 +32,7 @@ class Module(nn.Module):
         user_idx: (B,)
         item_idx: (B,)
         """
-        user_idx = user_idx.to(self.device)
-        item_idx = item_idx.to(self.device)
-        logit = self.score(user_idx, item_idx)
-        return logit
+        return self.score(user_idx, item_idx)
 
     def predict(
         self, 
@@ -50,13 +43,9 @@ class Module(nn.Module):
         user_idx: (B,)
         item_idx: (B,)
         """
-        user_idx = user_idx.to(self.device)
-        item_idx = item_idx.to(self.device)
-
         with torch.no_grad():
             logit = self.score(user_idx, item_idx)
             pred = torch.sigmoid(logit)
-
         return pred
 
     def score(self, user_idx, item_idx):
